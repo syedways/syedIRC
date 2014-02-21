@@ -10,7 +10,8 @@ func mock_user() (user ircUser) {
 	server := Server{}
 	server.Name = "TestIRCd"
 	server.Host = "TestIRCd.testserver.net"
-	server.Clients = make(map[*net.Conn]*ircUser)
+	server.Unregistered = make(map[*net.Conn]*ircUser)
+	server.Clients = make(map[string]*ircUser)
 
 	user.Nick = "AUTH"
 	user.Writer = make(chan string)
@@ -22,7 +23,7 @@ func mock_user() (user ircUser) {
 
 func mockWriter(writer <-chan string) {
 	for write := range writer {
-		write = write + "S"
+		write = write + "S" // Do nothing with it.
 	}
 }
 

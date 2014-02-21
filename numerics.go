@@ -37,6 +37,11 @@ const (
 
 	RPL_AWAY = "301"
 
+	// added by syed
+	RPL_USERHOST = "302"
+	RPL_ISON     = "303"
+	// end
+
 	RPL_UNAWAY  = "305"
 	RPL_NOWAWAY = "306"
 
@@ -95,7 +100,6 @@ const (
 	ERR_NOMOTD               = "422"
 	ERR_ERRONEUSNICKNAME     = "432"
 	ERR_NICKNAMEINUSE        = "433"
-	ERR_NORULES              = "434" // unrealircd
 	ERR_USERNOTINCHANNEL     = "441"
 	ERR_NOTONCHANNEL         = "442"
 	ERR_USERONCHANNEL        = "443"

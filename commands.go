@@ -3,19 +3,46 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 )
 
 func IRC_USER(msg *ircMessage) {
 	// USER <username> <mode> * <:Real name>
-	// We get the username, and realname and send it to the channel to update.
 	msg.User.User = msg.Payload[0]
 	msg.User.Mode, _ = strconv.Atoi(msg.Payload[1])
 	msg.User.Realname = msg.Payload[3]
 
-	// Add to fully registered map.
-	if msg.User.Nick != "AUTH" && msg.User.User != "" && msg.User.Realname != "" {
-		msg.User.updateUser()
-		msg.User.welcome_message()
+	if msg.User.User != "" && msg.User.Realname != "" {
+		msg.User.updateUser() // Register User
+
+		go func() {
+			user := msg.User
+			// If malformed nick, we will wait for manual mode update from client.
+			if user.Nick != "AUTH" {
+				defer user.Command("MODE", "+i")
+			}
+			// Send initial notices. In the future will actually check for hostname and ident
+			user.serverWrite(user.Nick, "NOTICE", "*** Looking up your hostname...")
+			user.serverWrite(user.Nick, "NOTICE", "*** Checking Ident")
+			user.serverWrite(user.Nick, "NOTICE", "*** Found your hostname")
+			time.Sleep(5 * 1e9) // Artificial wait - Allows us a nice period to fix any malformed nicks.
+			user.serverWrite(user.Nick, "NOTICE", "*** No Ident response")
+
+			// WELCOME messages
+			user.sendNumeric(RPL_WELCOME, ":Welcome to the "+user.Server.Name+" Internet Relay Chat Network "+
+				user.Host)
+			user.sendNumeric(RPL_YOURHOST, ":Your host is "+user.Server.Host+", running goIRC v1.0.0")
+			user.sendNumeric(RPL_CREATED, ":This server was created Tue Dec 17 2013 at 23:43:26 EST") // Needs to be non-hardcoded
+			user.sendNumeric(RPL_SERVERVERSION, ":"+user.Server.Host+" goIRC.0.0 iowghraAsORTVSxNCWqBzvdHtGpfF lvhopsmntikrRcaqOALQbSeIKVfMCuzNTGjHFEB")
+			user.sendNumeric(RPL_ISUPPORT, ":CHANTYPES=#")
+			user.sendNumeric(RPL_ISUPPORT, ":CHANMODES= BLAH BLAH BLAH")
+			user.sendNumeric(RPL_ISUPPORT, ":PREFIX=(BLAH BLAH BLAH)")
+			user.sendNumeric(RPL_ISUPPORT, ":are supported by this server")
+			user.sendNumeric(RPL_MOTDSTART, ":"+user.Server.Host+" Message of the Day -")
+			user.sendNumeric(RPL_MOTD, ":- Trickle down economics is a sham. - Richard 'two-buck chuck' Holland")
+			user.sendNumeric(RPL_ENDOFMOTD, ":End of /MOTD")
+		}()
 	} else {
 		fmt.Printf("USER command failed, ending user connection.")
 		msg.User.deleteUser()
@@ -25,28 +52,23 @@ func IRC_USER(msg *ircMessage) {
 
 func IRC_NICK(msg *ircMessage) {
 	// NICK <nickname>
-	if msg.Payload[0] == "AUTH" { // also need to add checks if nickname fits rfc.
+	if msg.Payload[0] == "AUTH" || !isValidNick(msg.Payload[0]) {
 		msg.User.sendNumeric(ERR_ERRONEUSNICKNAME, msg.Payload[0]+" :Erroneous Nickname.")
 		return
 	}
 
-	// Check if nickname is in use. - FIX
-	for _, v := range msg.User.Server.Clients {
-		if v.Nick == msg.Payload[0] {
-			msg.User.sendNumeric(ERR_NICKNAMEINUSE, msg.Payload[0]+" :This nickname is already in use.")
-			return
-		}
+	// Check if wanted nickname is in use.
+	if _, ok := msg.Server.Clients[msg.Payload[0]]; ok {
+		msg.User.sendNumeric(ERR_NICKNAMEINUSE, msg.Payload[0]+" :This nickname is already in use.")
+		return
 	}
 
-	// Check if current nickname is registered, if not register it. - FIX
-	if _, ok := msg.Server.Clients[&msg.User.Conn]; ok {
-		msg.User.raw(":"+msg.User.getFullHost(), "NICK", ":"+msg.Payload[0])
-		msg.User.Nick = msg.Payload[0]
-		msg.User.updateUser() // Add new user.
-	} else {
-		msg.User.Nick = msg.Payload[0]
-		msg.User.updateUser()
+	if _, ok := msg.Server.Clients[msg.User.Nick]; ok {
+		// If registered - Notify client nick change was successful
+		msg.User.raw(":"+msg.User.Host, "NICK", ":"+msg.Payload[0])
 	}
+	msg.User.Nick = msg.Payload[0]
+	msg.User.updateUser()
 }
 
 func IRC_CAP(msg *ircMessage) {
@@ -56,12 +78,49 @@ func IRC_CAP(msg *ircMessage) {
 
 func IRC_MODE(msg *ircMessage) {
 	// MODE <nick> +/-<mode>
-	return
+	if msg.Payload[0] == msg.User.Nick {
+		// Will add regex for mode later.
+		msg.User.Command("MODE", msg.Payload[1])
+	} else {
+		msg.User.sendNumeric(ERR_USERSDONTMATCH, msg.User.Nick+" :You can not change modes for other users.")
+	}
 }
 
 func IRC_PONG(msg *ircMessage) {
 	// PING :<payload>
 	msg.User.serverWrite(msg.User.Server.Host, "PONG", msg.Payload[0])
+}
+
+func IRC_USERHOST(msg *ircMessage) {
+	// USERHOST :<nick> <nick> <nick> <nick> <nick>
+	response := []string{} // Create a response array.
+	// Iterate over the payload, unless it's above 5 - in which case, limit it.
+	iter := msg.Payload
+	if len(msg.Payload) >= 5 {
+		iter = msg.Payload[0:5]
+	}
+	for _, nick := range iter {
+		// nickname=+(-)userid@host
+		if u, ok := msg.Server.Clients[nick]; ok {
+			user := []string{u.Nick + "=", "+", u.User + "@", u.getHostAddr()}
+			if u.AWAY {
+				user[1] = "-"
+			}
+			response = append(response, strings.Join(user, ""))
+		}
+	}
+	msg.User.sendNumeric(RPL_USERHOST, ":"+strings.Join(response, " "))
+}
+
+func IRC_ISON(msg *ircMessage) {
+	// ISON :<nick>...
+	response := []string{}
+	for _, nick := range msg.Payload {
+		if u, ok := msg.Server.Clients[nick]; ok {
+			response = append(response, u.Nick)
+		}
+	}
+	msg.User.sendNumeric(RPL_ISON, ":"+strings.Join(response, " "))
 }
 
 func IRC_QUIT(msg *ircMessage) {
