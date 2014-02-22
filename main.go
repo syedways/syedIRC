@@ -17,6 +17,29 @@ type Server struct {
 	Clients      map[string]*ircUser
 }
 
+func (server *Server) nickExists(nick string) (exists bool, registered bool, user ircUser) {
+	// Check if wanted nickname is in use. Case-insensitive
+	// Preferred usage: User-input when they may enter case insensitive nicks.
+	if u, ok := server.Clients[nick]; ok { // Try the easy way first.
+		exists, registered, user = true, true, *u
+		return
+	}
+
+	for _, v := range server.Unregistered {
+		if strings.EqualFold(v.Nick, nick) {
+			exists, user = true, *v
+			return
+		}
+	}
+	for k, v := range server.Clients {
+		if strings.EqualFold(k, nick) {
+			exists, registered, user = true, true, *v
+			return
+		}
+	}
+	return
+}
+
 type ircMessage struct {
 	User    *ircUser
 	Command string

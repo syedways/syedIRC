@@ -22,23 +22,25 @@ type ircUser struct {
 	mu       sync.Mutex  // Sync it up
 }
 
-func isValidNick(nick string) bool {
+func (user *ircUser) isValidNick(nick string) bool {
 	// nickname   =  ( letter / special ) *8( letter / digit / special / "-" )
 	re_between := "`_\\^\\{\\|\\}][A-Za-z0-9\\[\\]\\`"
 	re_nick := `[A-Za-z\[\]\\` + re_between + `_\^\{\|\}\-]{0,8}`
 	isValid, _ := regexp.MatchString(re_nick, nick)
 	return isValid
 }
+
 func (user *ircUser) getHostAddr() (h string) {
 	h, _, _ = net.SplitHostPort(user.Conn.LocalAddr().String()) // Return IP/Host
 	return
 }
 
 func (user *ircUser) updateUser() {
+	// Called when updating user, even during registration.
 	user.mu.Lock()
-	if user.Nick != "" && user.User != "" {
-		h, _, _ := net.SplitHostPort(user.Conn.LocalAddr().String()) // Return IP/Host
-		user.Host = user.Nick + "!~" + user.User + "@" + h
+	if user.Host == "" {
+		// Set host manually - In case provided pointer doesn't have set.
+		user.Host = user.Nick + "!~" + user.User + "@" + user.getHostAddr()
 	}
 	if user.Nick != "AUTH" && user.User == "" {
 		user.Server.Unregistered[&user.Conn] = user

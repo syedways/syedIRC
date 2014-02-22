@@ -22,6 +22,7 @@ func IRC_USER(msg *ircMessage) {
 			if user.Nick != "AUTH" {
 				defer user.Command("MODE", "+i")
 			}
+
 			// Send initial notices. In the future will actually check for hostname and ident
 			user.serverWrite(user.Nick, "NOTICE", "*** Looking up your hostname...")
 			user.serverWrite(user.Nick, "NOTICE", "*** Checking Ident")
@@ -52,14 +53,13 @@ func IRC_USER(msg *ircMessage) {
 
 func IRC_NICK(msg *ircMessage) {
 	// NICK <nickname>
-	if msg.Payload[0] == "AUTH" || !isValidNick(msg.Payload[0]) {
+	if msg.Payload[0] == "AUTH" || !msg.User.isValidNick(msg.Payload[0]) {
 		msg.User.sendNumeric(ERR_ERRONEUSNICKNAME, msg.Payload[0]+" :Erroneous Nickname.")
 		return
 	}
 
-	// Check if wanted nickname is in use.
-	if _, ok := msg.Server.Clients[msg.Payload[0]]; ok {
-		msg.User.sendNumeric(ERR_NICKNAMEINUSE, msg.Payload[0]+" :This nickname is already in use.")
+	if e, _, u := msg.Server.nickExists(msg.Payload[0]); e {
+		msg.User.sendNumeric(ERR_NICKNAMEINUSE, u.Nick+" :This nickname is already in use.")
 		return
 	}
 
@@ -101,7 +101,7 @@ func IRC_USERHOST(msg *ircMessage) {
 	}
 	for _, nick := range iter {
 		// nickname=+(-)userid@host
-		if u, ok := msg.Server.Clients[nick]; ok {
+		if e, r, u := msg.Server.nickExists(nick); e && r { // If user exists and is registered.
 			user := []string{u.Nick + "=", "+", u.User + "@", u.getHostAddr()}
 			if u.AWAY {
 				user[1] = "-"
@@ -116,7 +116,7 @@ func IRC_ISON(msg *ircMessage) {
 	// ISON :<nick>...
 	response := []string{}
 	for _, nick := range msg.Payload {
-		if u, ok := msg.Server.Clients[nick]; ok {
+		if e, _, u := msg.Server.nickExists(nick); e {
 			response = append(response, u.Nick)
 		}
 	}
