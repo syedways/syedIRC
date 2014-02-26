@@ -15,6 +15,7 @@ type Server struct {
 	Host         string
 	Unregistered map[*net.Conn]*ircUser
 	Clients      map[string]*ircUser
+	Connection   net.Listener
 }
 
 func (server *Server) nickExists(nick string) (exists bool, registered bool, user ircUser) {
@@ -44,7 +45,7 @@ type ircMessage struct {
 	User    *ircUser
 	Command string
 	Payload []string
-	Server  Server
+	Server  *Server
 }
 
 func main() {
@@ -53,16 +54,6 @@ func main() {
 		fmt.Println("WARNING: You're running as root, please don't do this if you can run as another user.")
 	}
 
-	// Start listening on port 6667. More ports in the future.
-	ln, err := net.Listen("tcp", ":6667")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Create a channel that handles messages.
-	msgchan := make(chan ircMessage)
-	go handleMessages(msgchan)
-
 	// Initialize a new server
 	server := Server{}
 	server.Name = "Syed's FunHouse"
@@ -70,40 +61,73 @@ func main() {
 	server.Unregistered = make(map[*net.Conn]*ircUser)
 	server.Clients = make(map[string]*ircUser)
 
+	// Start listening on port 6667. More ports in the future.
+	conn, err := net.Listen("tcp", ":6667")
+	if err != nil {
+		log.Fatal(err)
+	}
+	server.Connection = conn
+
+	// Create a channel that handles messages for the server.
+	msgchan := make(chan ircMessage)
+	go handleMessages(msgchan)
+
 	for {
-		conn, err := ln.Accept()
+		conn, err := server.Connection.Accept()
 		if err != nil {
 			fmt.Printf("%v\n - Error is in main()", err)
-			continue
+			break
 		}
 		fmt.Printf("%s: %v <-> %v\n", "New connection accepted", conn.LocalAddr(), conn.RemoteAddr())
 		// On connect, send connection info, message channel, and server
-		go handleConnection(conn, msgchan, server)
+		go handleConnection(conn, msgchan, &server)
 	}
 }
 
-func handleConnection(c net.Conn, msgchan chan<- ircMessage, server Server) {
+func handleConnection(c net.Conn, msgchan chan<- ircMessage, server *Server) {
 	raw := bufio.NewReader(c)
 	b := bufio.NewReader(io.LimitReader(raw, 1024))
 
 	// Initialize User
 	user := ircUser{}
 	user.Nick = "AUTH"
-	user.Writer = make(chan string)
 	user.Conn = c
 	user.Server = server
-	go user.handleWrite(user.Writer)
+
+	user.Writer = make(chan string)
+	killswitch := make(chan bool)
 
 	// Start creating the message.
 	var message ircMessage
 	message.User, message.Server = &user, server
 
+	go func() {
+		for {
+			select {
+			case <-killswitch:
+				fmt.Println("Killing writer goroutine for " + message.User.Nick)
+				return
+			default:
+				write := <-user.Writer
+				fmt.Println(write)
+				bytes := []byte(write + "\r\n")
+				_, err := user.Conn.Write(bytes)
+				if err != nil {
+					fmt.Printf("Write err: %v\n", err)
+					user.Conn.Close()
+					return
+				}
+			}
+		}
+	}()
+
 	for {
 		line, _, err := b.ReadLine()
 		if err != nil { // EOF, or worse
 			fmt.Printf("%v\n", err)
+			killswitch <- true
 			c.Close()
-			break
+			return
 		}
 		// Split the incoming message into command and payload and send to message channel
 		lnsplit := strings.Split(string(line), " ")
@@ -117,50 +141,39 @@ func handleConnection(c net.Conn, msgchan chan<- ircMessage, server Server) {
 	// log.Printf("Connection from %v closed.", c.RemoteAddr())
 }
 
-func (user *ircUser) handleWrite(writer <-chan string) {
-	for write := range writer {
-		fmt.Println(write)
-		bytes := []byte(write + "\r\n")
-		_, err := user.Conn.Write(bytes)
-		if err != nil {
-			fmt.Printf("Write err: %v\n", err)
-			user.Conn.Close()
-			return
-		}
-	}
-}
-
 func handleMessages(msgchan <-chan ircMessage) {
 	for msg := range msgchan {
-		// Get updated user
-		msg.User = msg.User.getUser()
-		// // Rate limiter
+		// Rate limiter
 		// if msg.User.reachedLimit() {
 		// 	msg.User.raw(":"+msg.User.Host, "QUIT", ":Excess flood")
 		// 	msg.User.Conn.Close()
 		// 	msg.User.deleteUser()
 		// }
 		fmt.Printf("%s :: %s || %s\n", msg.User.Nick, msg.Command, msg.Payload)
-		// List of all handlers based on the scommand sent by clients.
-		commands := map[string]interface{}{
-			"USER":     IRC_USER,
-			"NICK":     IRC_NICK,
-			"CAP":      IRC_CAP,
-			"QUIT":     IRC_QUIT,
-			"PING":     IRC_PONG,
-			"MODE":     IRC_MODE,
-			"USERHOST": IRC_USERHOST,
-			"ISON":     IRC_ISON,
-		}
-		if f, found := commands[msg.Command]; found {
-			msg.handleCommand(f)
-		} else {
-			msg.User.sendNumeric(ERR_UNKNOWNCOMMAND, msg.Command+" :This command is unknown or unsupported.")
-		}
+		msg.handleCommand()
 	}
 }
 
-func (msg *ircMessage) handleCommand(f interface{}) {
+func (msg *ircMessage) handleCommand() {
 	// Call related function
-	f.(func(*ircMessage))(msg)
+	// List of all handlers based on the scommand sent by clients.
+	commands := map[string]func(*ircMessage) (string, string){
+		"USER":     IRC_USER,
+		"NICK":     IRC_NICK,
+		"CAP":      IRC_CAP,
+		"QUIT":     IRC_QUIT,
+		"PING":     IRC_PONG,
+		"MODE":     IRC_MODE,
+		"USERHOST": IRC_USERHOST,
+		"ISON":     IRC_ISON,
+	}
+	if ircCommand, found := commands[msg.Command]; !found {
+		msg.User.sendNumeric(ERR_UNKNOWNCOMMAND, msg.Command+" :This command is unknown or unsupported.")
+	} else {
+		retCode, retMsg := ircCommand(msg)
+		if retCode != "" && retMsg != "" {
+			// fmt.Printf("Error: %s -- %s\n", retCode, retMsg)
+			msg.User.sendNumeric(retCode, retMsg)
+		}
+	}
 }

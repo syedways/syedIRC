@@ -5,7 +5,6 @@ import (
 	"net"
 	"regexp"
 	"strings"
-	"sync"
 )
 
 type ircUser struct {
@@ -17,16 +16,15 @@ type ircUser struct {
 	Realname string      // real name
 	Writer   chan string // used to write messages to user
 	Conn     net.Conn    // pointer to connection
-	Server   Server      // pointer to server
-	NickList []byte      // Past 5 nicknames - excluding present
-	mu       sync.Mutex  // Sync it up
+	Server   *Server     // pointer to server
+	NickList []string    // Past 5 nicknames - excluding present
 }
 
 func (user *ircUser) isValidNick(nick string) bool {
 	// nickname   =  ( letter / special ) *8( letter / digit / special / "-" )
-	re_between := "`_\\^\\{\\|\\}][A-Za-z0-9\\[\\]\\`"
-	re_nick := `[A-Za-z\[\]\\` + re_between + `_\^\{\|\}\-]{0,8}`
-	isValid, _ := regexp.MatchString(re_nick, nick)
+	// special = "[", "]", "\", "`", "_", "^", "{", "|", "}"
+	re_special := "`" + `\[\]\_^{|}`
+	isValid, _ := regexp.MatchString(`^[(A-Za-z)(`+re_special+`)][A-Za-z0-9`+re_special+"]{0,8}$", nick)
 	return isValid
 }
 
@@ -35,36 +33,23 @@ func (user *ircUser) getHostAddr() (h string) {
 	return
 }
 
-func (user *ircUser) updateUser() {
-	// Called when updating user, even during registration.
-	user.mu.Lock()
-	if user.Host == "" {
-		// Set host manually - In case provided pointer doesn't have set.
-		user.Host = user.Nick + "!~" + user.User + "@" + user.getHostAddr()
-	}
-	if user.Nick != "AUTH" && user.User == "" {
+func (user *ircUser) updateNick(nick string) {
+	// More focused on nickname changes.
+	if _, ok := user.Server.Clients[user.Nick]; !ok {
+		user.Nick = nick
 		user.Server.Unregistered[&user.Conn] = user
+	} else {
+		delete(user.Server.Clients, user.Nick)
+		user.Nick = nick
+		user.updateUser()
 	}
-	if _, ok := user.Server.Unregistered[&user.Conn]; ok && user.User != "" {
-		user.Server.Clients[user.Nick] = user
-		delete(user.Server.Unregistered, &user.Conn)
-	}
-	user.mu.Unlock()
 }
 
-func (user *ircUser) getUser() (u *ircUser) {
-	user.mu.Lock()
-	u = user
-	// Get user from unregistered map
-	if _, ok := user.Server.Unregistered[&user.Conn]; ok {
-		u = user.Server.Unregistered[&user.Conn]
-	}
-	// Get user from clients map
-	if _, ok := user.Server.Clients[user.Nick]; ok {
-		u = user.Server.Clients[user.Nick]
-	}
-	user.mu.Unlock()
-	return
+func (user *ircUser) updateUser() {
+	// Set host manually - In case provided pointer doesn't have set.
+	user.Host = user.Nick + "!~" + user.User + "@" + user.getHostAddr()
+	user.Server.Clients[user.Nick] = user
+	delete(user.Server.Unregistered, &user.Conn)
 }
 
 func (user *ircUser) deleteUser() {
