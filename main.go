@@ -21,6 +21,7 @@ type Server struct {
 func (server *Server) nickExists(nick string) (exists bool, registered bool, user ircUser) {
 	// Check if wanted nickname is in use. Case-insensitive
 	// Preferred usage: User-input when they may enter case insensitive nicks.
+	// BENCHMARK this, see if equalfold is resource intensive. -- Syed
 	if u, ok := server.Clients[nick]; ok { // Try the easy way first.
 		exists, registered, user = true, true, *u
 		return
@@ -131,12 +132,14 @@ func handleConnection(c net.Conn, msgchan chan<- ircMessage, server *Server) {
 		}
 		// Split the incoming message into command and payload and send to message channel
 		lnsplit := strings.Split(string(line), " ")
-		message.Command = lnsplit[0]
+		message.Command = strings.ToUpper(lnsplit[0]) // Commands are stored in uppercase
 		if len(lnsplit) > 1 {
 			lnsplit[1] = strings.TrimPrefix(lnsplit[1], ":") // Remove ":" prefix
 			message.Payload = lnsplit[1:]
 		}
 		msgchan <- message
+		// Remove payload and command from memory.
+		message.Payload, message.Command = []string{}, ""
 	}
 	// log.Printf("Connection from %v closed.", c.RemoteAddr())
 }
@@ -154,26 +157,38 @@ func handleMessages(msgchan <-chan ircMessage) {
 	}
 }
 
+type CommandInfo struct {
+	// Will put more here in future.
+	run     func(*ircMessage) (string, string) // Holds a pointer to function call
+	minimum int                                // Minimum parameters allowed
+}
+
 func (msg *ircMessage) handleCommand() {
 	// Call related function
 	// List of all handlers based on the scommand sent by clients.
-	commands := map[string]func(*ircMessage) (string, string){
-		"USER":     IRC_USER,
-		"NICK":     IRC_NICK,
-		"CAP":      IRC_CAP,
-		"QUIT":     IRC_QUIT,
-		"PING":     IRC_PONG,
-		"MODE":     IRC_MODE,
-		"USERHOST": IRC_USERHOST,
-		"ISON":     IRC_ISON,
+	commands := map[string]CommandInfo{
+		// Command : Function, minimum parameters.
+		"USER":     CommandInfo{IRC_USER, 4},
+		"NICK":     CommandInfo{IRC_NICK, 1},
+		"CAP":      CommandInfo{IRC_CAP, 0},
+		"QUIT":     CommandInfo{IRC_QUIT, 0},
+		"PING":     CommandInfo{IRC_PONG, 0},
+		"MODE":     CommandInfo{IRC_MODE, 2},
+		"USERHOST": CommandInfo{IRC_USERHOST, 1},
+		"ISON":     CommandInfo{IRC_ISON, 1},
 	}
 	if ircCommand, found := commands[msg.Command]; !found {
 		msg.User.sendNumeric(ERR_UNKNOWNCOMMAND, msg.Command+" :This command is unknown or unsupported.")
+		return
 	} else {
-		retCode, retMsg := ircCommand(msg)
-		if retCode != "" && retMsg != "" {
-			// fmt.Printf("Error: %s -- %s\n", retCode, retMsg)
-			msg.User.sendNumeric(retCode, retMsg)
+		if len(msg.Payload) >= ircCommand.minimum {
+			retCode, retMsg := ircCommand.run(msg)
+			if retCode != "" && retMsg != "" {
+				// fmt.Printf("Error: %s -- %s\n", retCode, retMsg)
+				msg.User.sendNumeric(retCode, retMsg)
+			}
+		} else {
+			msg.User.sendNumeric(ERR_NEEDMOREPARAMS, msg.Command+" :Not enough parameters")
 		}
 	}
 }

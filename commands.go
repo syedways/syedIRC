@@ -80,6 +80,7 @@ func IRC_MODE(msg *ircMessage) (string, string) {
 	// MODE <nick> +/-<mode>
 	if msg.Payload[0] == msg.User.Nick {
 		// Will add regex for mode later.
+		// need to add check whether mode is real and accessible by user.
 		msg.User.Command("MODE", msg.Payload[1])
 	} else {
 		return ERR_USERSDONTMATCH, msg.User.Nick + " :You can not change modes for other users."
