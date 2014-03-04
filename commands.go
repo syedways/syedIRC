@@ -214,6 +214,14 @@ func IRC_ISON(msg *ircMessage) (string, string) {
 	return RPL_ISON, ":" + strings.Join(response, " ")
 }
 
+func IRC_TIME(msg *ircMessage) (string, string) {
+	// TIME <server>
+	// Add support for multiple supports later
+	const layout = ":Monday January 2 2006 -- 15:04:05 -07:00"
+	t := time.Now()
+	return RPL_TIME, t.Format(layout)
+}
+
 func IRC_QUIT(msg *ircMessage) (string, string) {
 	// QUIT
 	msg.User.deleteUser()

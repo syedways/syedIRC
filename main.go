@@ -175,6 +175,7 @@ func (msg *ircMessage) handleCommand() {
 		"MODE":     CommandInfo{IRC_MODE, 1},
 		"USERHOST": CommandInfo{IRC_USERHOST, 1},
 		"ISON":     CommandInfo{IRC_ISON, 1},
+		"TIME":     CommandInfo{IRC_TIME, 0},
 	}
 	if ircCommand, found := commands[msg.Command]; !found {
 		msg.User.sendNumeric(ERR_UNKNOWNCOMMAND, msg.Command+" :This command is unknown or unsupported.")
