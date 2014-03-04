@@ -11,7 +11,7 @@ type ircUser struct {
 	Nick     string      // nickname at the moment.
 	User     string      // username
 	Host     string      // Userhost
-	Mode     int         // Modes(converted to ints, not sure about this yet.)
+	Modes    string      // Modes currently
 	AWAY     bool        // If user is away
 	Realname string      // real name
 	Writer   chan string // used to write messages to user

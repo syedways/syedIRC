@@ -37,11 +37,6 @@ const (
 
 	RPL_AWAY = "301"
 
-	// added by syed
-	RPL_USERHOST = "302"
-	RPL_ISON     = "303"
-	// end
-
 	RPL_UNAWAY  = "305"
 	RPL_NOWAWAY = "306"
 
@@ -130,4 +125,10 @@ const (
 
 	ERR_CHANOPEN    = "713"
 	ERR_KNOCKONCHAN = "714"
+
+	// added by syed
+	RPL_USERHOST         = "302"
+	RPL_ISON             = "303"
+	ERR_UMODEUNKNOWNFLAG = "501"
+	// end
 )

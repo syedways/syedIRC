@@ -110,7 +110,6 @@ func handleConnection(c net.Conn, msgchan chan<- ircMessage, server *Server) {
 				return
 			default:
 				write := <-user.Writer
-				fmt.Println(write)
 				bytes := []byte(write + "\r\n")
 				_, err := user.Conn.Write(bytes)
 				if err != nil {
@@ -173,7 +172,7 @@ func (msg *ircMessage) handleCommand() {
 		"CAP":      CommandInfo{IRC_CAP, 0},
 		"QUIT":     CommandInfo{IRC_QUIT, 0},
 		"PING":     CommandInfo{IRC_PONG, 0},
-		"MODE":     CommandInfo{IRC_MODE, 2},
+		"MODE":     CommandInfo{IRC_MODE, 1},
 		"USERHOST": CommandInfo{IRC_USERHOST, 1},
 		"ISON":     CommandInfo{IRC_ISON, 1},
 	}
@@ -184,7 +183,6 @@ func (msg *ircMessage) handleCommand() {
 		if len(msg.Payload) >= ircCommand.minimum {
 			retCode, retMsg := ircCommand.run(msg)
 			if retCode != "" && retMsg != "" {
-				// fmt.Printf("Error: %s -- %s\n", retCode, retMsg)
 				msg.User.sendNumeric(retCode, retMsg)
 			}
 		} else {

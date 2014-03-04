@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"strconv"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -10,7 +10,6 @@ import (
 func IRC_USER(msg *ircMessage) (string, string) {
 	// USER <username> <mode> * <:Real name>
 	msg.User.User = msg.Payload[0]
-	msg.User.Mode, _ = strconv.Atoi(msg.Payload[1])
 	msg.User.Realname = msg.Payload[3][1:]
 
 	if _, ok := msg.Server.Clients[msg.User.Nick]; !ok {
@@ -20,7 +19,9 @@ func IRC_USER(msg *ircMessage) (string, string) {
 			user := msg.User
 			// If malformed nick, we will wait for manual mode update from client.
 			if user.Nick != "AUTH" {
+				msg.User.Modes = "i"
 				defer user.Command("MODE", "+i")
+				defer fmt.Println("Sent welcome messages and MOTD to:", msg.User.Nick)
 			}
 
 			// Send initial notices. In the future will actually check for hostname and ident
@@ -78,13 +79,100 @@ func IRC_CAP(msg *ircMessage) (string, string) {
 
 func IRC_MODE(msg *ircMessage) (string, string) {
 	// MODE <nick> +/-<mode>
-	if msg.Payload[0] == msg.User.Nick {
-		// Will add regex for mode later.
-		// need to add check whether mode is real and accessible by user.
-		msg.User.Command("MODE", msg.Payload[1])
-	} else {
-		return ERR_USERSDONTMATCH, msg.User.Nick + " :You can not change modes for other users."
+	// a - user is flagged as away; // can't be set with this command
+	// i - marks a users as invisible;
+	// w - user receives wallops;
+	// r - restricted user connection; // obosolete in this implementation
+	// o - operator flag; // not implemented; when it is, only unset is allowed
+	// O - local operator flag; // not implemented; when it is, only unset is allowed
+	// s - marks a user for receipt of server notices. // obsolete.
+
+	usableModes := "iw"            // Usable modes.
+	setModes, unsetModes := "", "" // Sent to client at end.
+	unknownReached := false        // Reached an unknown mode, return an error.
+
+	if strings.ToLower(msg.Payload[0]) != strings.ToLower(msg.User.Nick) {
+		return ERR_USERSDONTMATCH, msg.User.Nick + " :Cannot change mode for other users"
 	}
+
+	// If only provided nick, return modes of self.
+	if len(msg.Payload) == 1 {
+		return RPL_UMODEIS, "+" + msg.User.Modes
+	}
+
+	// Extract all mode changes from message
+	r, _ := regexp.Compile(`(-|\+*)([A-Za-z]+)`)
+	chmodes := r.FindAllStringSubmatch(msg.Payload[1], -1)
+
+	for _, d := range chmodes {
+		// chmodes is a list of seperated mode changes
+		// -wi+iw-iw+iw-w+w would result in 6 iterations
+		chType := true // true = set mode, false = unset mode:
+		if d[1] == "-" {
+			chType = false
+		}
+
+		// Sort through modes for this iteration
+		for _, char := range d[2] {
+			char := string(char)
+
+			// See if mode is usable, if not dump and send err message at the end.
+			if !strings.Contains(usableModes, char) {
+				unknownReached = true
+				continue
+			}
+			userHasMode := strings.Contains(msg.User.Modes, char)
+
+			// Unset a mode, check if already in the list to be unset
+			if !chType && !strings.Contains(unsetModes, char) {
+				// if mode exists in setmodes, or user doesn't have mode.
+				if strings.Contains(setModes, char) || !userHasMode {
+					setModes = strings.Replace(setModes, char, "", -1)
+					continue
+				}
+				unsetModes = unsetModes + char
+			}
+
+			// Set a mode, check if already in the list to be set
+			if chType && !strings.Contains(setModes, char) {
+				// if mode exists in unsetmodes, or user has mode.
+				if strings.Contains(unsetModes, char) || userHasMode {
+					unsetModes = strings.Replace(unsetModes, char, "", -1)
+					continue
+				}
+				setModes = setModes + char
+			}
+		}
+	}
+
+	if len(setModes) >= 1 || len(unsetModes) >= 1 { // If any mode changes
+		modeChanges := ""
+		if len(unsetModes) > 0 {
+			// Unset every mode that needs to be unset.
+			for _, mode := range unsetModes {
+				msg.User.Modes = strings.Replace(msg.User.Modes, string(mode), "", -1)
+			}
+			modeChanges = modeChanges + "-" + unsetModes
+		}
+		if len(setModes) >= 1 {
+			// Add modes to user's mode list
+			msg.User.Modes = msg.User.Modes + setModes
+			modeChanges = modeChanges + "+" + setModes
+		}
+		// Log changes, and notify client.
+		if len(modeChanges) > 0 {
+			fmt.Println("Changed modes for", msg.User.Nick, ":: "+modeChanges)
+			defer msg.User.Command("MODE", modeChanges)
+		}
+	}
+
+	if !unknownReached {
+		return "", ""
+	}
+
+	// We don't use return for this numeric because we'd prefer to send
+	// this numeric before notifying client of mode change.
+	msg.User.sendNumeric(ERR_USERSDONTMATCH, ":Unknown MODE flag")
 	return "", ""
 }
 

@@ -107,3 +107,7 @@ func Test_Nick_Regex(t *testing.T) {
 		t.Error("NICK Regex Test has failed.")
 	}
 }
+
+func Test_Mode_Regex(t *testing.T) {
+	// Will wrte tests here in the future.
+}
